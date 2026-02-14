@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>메랜 자리 요일별 평균가 분석</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #f5f7fb; color: #1f2937; }
+      .container { max-width: 1000px; margin: 24px auto; padding: 0 16px; }
+      .card { background: #fff; border-radius: 12px; padding: 16px; box-shadow: 0 2px 12px rgba(0,0,0,0.08); margin-bottom: 16px; }
+      h1 { font-size: 24px; margin: 0 0 16px; }
+      .form-grid { display: grid; grid-template-columns: 1fr 1fr 1fr auto; gap: 12px; align-items: end; }
+      label { font-size: 13px; color: #4b5563; display: block; margin-bottom: 6px; }
+      input, button { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #d1d5db; border-radius: 8px; }
+      button { background: #2563eb; color: white; border: none; cursor: pointer; font-weight: 700; }
+      button:disabled { opacity: 0.6; cursor: not-allowed; }
+      .summary { display: flex; gap: 12px; flex-wrap: wrap; }
+      .pill { background: #eef2ff; color: #1e3a8a; border-radius: 999px; padding: 6px 10px; font-size: 14px; }
+      .error { color: #b91c1c; font-weight: 700; }
+      @media (max-width: 860px) {
+        .form-grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <h1>요일별 평균가 대시보드</h1>
+        <div class="form-grid">
+          <div>
+            <label for="url">Mashop 자리 URL</label>
+            <input id="url" type="url" />
+          </div>
+          <div>
+            <label for="startDate">시작일</label>
+            <input id="startDate" type="date" />
+          </div>
+          <div>
+            <label for="endDate">종료일</label>
+            <input id="endDate" type="date" />
+          </div>
+          <div>
+            <button id="loadBtn">불러오기</button>
+          </div>
+        </div>
+        <p id="status"></p>
+      </div>
+
+      <div class="card">
+        <div class="summary" id="summary"></div>
+      </div>
+
+      <div class="card">
+        <canvas id="weekdayChart" height="130"></canvas>
+      </div>
+    </div>
+
+    <script>
+      const defaultUrl = 'https://mashop.kr/jari/%EB%AF%B8%EB%82%98%EB%A5%B4%EC%88%B2%3A%EB%82%A8%EA%B2%A8%EC%A7%84%20%EC%9A%A9%EC%9D%98%20%EB%91%A5%EC%A7%80';
+      const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+      const numberFormat = new Intl.NumberFormat('ko-KR');
+
+      const urlInput = document.getElementById('url');
+      const startInput = document.getElementById('startDate');
+      const endInput = document.getElementById('endDate');
+      const button = document.getElementById('loadBtn');
+      const summary = document.getElementById('summary');
+      const status = document.getElementById('status');
+
+      urlInput.value = defaultUrl;
+      const today = new Date();
+      const past = new Date(today);
+      past.setDate(today.getDate() - 14);
+      startInput.value = past.toISOString().slice(0, 10);
+      endInput.value = today.toISOString().slice(0, 10);
+
+      let chart;
+
+      function weekdayStats(rows) {
+        const sums = Array(7).fill(0);
+        const counts = Array(7).fill(0);
+
+        for (const row of rows) {
+          if (!row.dateTime || typeof row.price !== 'number') continue;
+          const day = new Date(row.dateTime).getDay();
+          sums[day] += row.price;
+          counts[day] += 1;
+        }
+
+        return weekdays.map((name, i) => ({
+          name,
+          avg: counts[i] ? Math.round(sums[i] / counts[i]) : 0,
+          count: counts[i],
+        }));
+      }
+
+      function renderSummary(stats) {
+        const usable = stats.filter((s) => s.count > 0);
+        summary.innerHTML = '';
+
+        if (!usable.length) {
+          summary.innerHTML = '<span class="pill">데이터가 없습니다.</span>';
+          return;
+        }
+
+        const cheapest = usable.reduce((a, b) => (a.avg <= b.avg ? a : b));
+        const expensive = usable.reduce((a, b) => (a.avg >= b.avg ? a : b));
+
+        summary.innerHTML = `
+          <span class="pill">가장 저렴: ${cheapest.name}요일 (${numberFormat.format(cheapest.avg)} 메소)</span>
+          <span class="pill">가장 비쌈: ${expensive.name}요일 (${numberFormat.format(expensive.avg)} 메소)</span>
+        `;
+      }
+
+      function renderChart(stats) {
+        const labels = stats.map((s) => `${s.name}요일`);
+        const data = stats.map((s) => s.avg);
+
+        if (chart) chart.destroy();
+
+        chart = new Chart(document.getElementById('weekdayChart'), {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [{
+              label: '요일별 평균가(메소)',
+              data,
+              backgroundColor: data.map((v) => (v ? '#3b82f6' : '#d1d5db')),
+              borderRadius: 6,
+            }],
+          },
+          options: {
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => `${numberFormat.format(ctx.raw)} 메소`,
+                },
+              },
+            },
+            scales: {
+              y: {
+                ticks: {
+                  callback: (val) => numberFormat.format(val),
+                },
+              },
+            },
+          },
+        });
+      }
+
+      async function loadData() {
+        status.textContent = '데이터를 불러오는 중...';
+        status.className = '';
+        button.disabled = true;
+
+        try {
+          const params = new URLSearchParams({
+            url: urlInput.value,
+            startDate: startInput.value,
+            endDate: endInput.value,
+          });
+
+          const response = await fetch(`/api/prices?${params.toString()}`);
+          const payload = await response.json();
+
+          if (!response.ok) {
+            throw new Error(payload.message || '요청 실패');
+          }
+
+          const stats = weekdayStats(payload.rows);
+          renderSummary(stats);
+          renderChart(stats);
+          status.textContent = `총 ${payload.rows.length}개 시점 데이터를 분석했습니다.`;
+        } catch (error) {
+          status.textContent = error.message;
+          status.className = 'error';
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      button.addEventListener('click', loadData);
+      loadData();
+    </script>
+  </body>
+</html>
