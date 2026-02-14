@@ -16,8 +16,7 @@ function extractKeywordFromUrl(targetUrl) {
       return null;
     }
 
-    const encoded = parsed.pathname.replace('/jari/', '');
-    return decodeURIComponent(encoded);
+    return decodeURIComponent(parsed.pathname.replace('/jari/', ''));
   } catch {
     return null;
   }
@@ -32,6 +31,10 @@ app.get('/api/prices', async (req, res) => {
     return res.status(400).json({ message: 'startDate와 endDate가 필요합니다.' });
   }
 
+  if (startDate > endDate) {
+    return res.status(400).json({ message: '시작일은 종료일보다 빠르거나 같아야 합니다.' });
+  }
+
   const keyword = extractKeywordFromUrl(sourceUrl);
   if (!keyword) {
     return res.status(400).json({ message: '올바른 mashop /jari URL을 입력해주세요.' });
@@ -40,12 +43,11 @@ app.get('/api/prices', async (req, res) => {
   let browser;
   try {
     browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({
+    const page = await browser.newPage({
       userAgent:
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
     });
 
-    const page = await context.newPage();
     await page.goto(sourceUrl, { waitUntil: 'domcontentloaded', timeout: 90000 });
 
     const apiUrl = `https://api.mashop.kr/api/v2/maps/price-stat/period?keyword=${encodeURIComponent(
@@ -60,13 +62,12 @@ app.get('/api/prices', async (req, res) => {
 
     if (!responsePayload.ok) {
       return res.status(502).json({
-        message: '가격 데이터를 가져오지 못했습니다.',
+        message: '메랜샵 시간별 평균가 데이터를 가져오지 못했습니다.',
         status: responsePayload.status,
       });
     }
 
     const rows = JSON.parse(responsePayload.text);
-
     return res.json({ keyword, sourceUrl, startDate, endDate, rows });
   } catch (error) {
     return res.status(500).json({
