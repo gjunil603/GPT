@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>메랜샵 시간별 평균가 → 요일별 평균가</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; background: #f3f4f6; color: #111827; }
+      .container { max-width: 1080px; margin: 24px auto; padding: 0 16px; }
+      .card { background: white; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,0.08); padding: 16px; margin-bottom: 16px; }
+      h1 { margin: 0 0 8px; }
+      .sub { color: #4b5563; margin-top: 0; }
+      .grid { display: grid; grid-template-columns: 1fr 160px 160px auto; gap: 10px; align-items: end; }
+      label { display: block; margin-bottom: 4px; color: #374151; font-size: 13px; }
+      input, button, select { width: 100%; box-sizing: border-box; padding: 10px; border-radius: 8px; border: 1px solid #d1d5db; }
+      button { border: none; background: #2563eb; color: white; font-weight: 700; cursor: pointer; }
+      .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+      .pill { padding: 6px 10px; border-radius: 999px; background: #e0e7ff; color: #1e3a8a; font-size: 14px; }
+      .error { color: #b91c1c; font-weight: bold; }
+      @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="card">
+        <h1>메랜샵 시간별 평균가 기반 요일 분석</h1>
+        <p class="sub">메랜샵의 시간별 평균가 그래프 데이터를 가져와 요일별 평균가로 다시 집계합니다.</p>
+        <div class="grid">
+          <div>
+            <label for="url">Mashop 자리 URL</label>
+            <input id="url" type="url" />
+          </div>
+          <div>
+            <label for="startDate">시작일</label>
+            <input id="startDate" type="date" />
+          </div>
+          <div>
+            <label for="endDate">종료일</label>
+            <input id="endDate" type="date" />
+          </div>
+          <div>
+            <button id="loadBtn">분석하기</button>
+          </div>
+        </div>
+        <p id="status"></p>
+        <div class="meta" id="summary"></div>
+      </div>
+
+      <div class="card">
+        <h3>원본: 시간별 평균가</h3>
+        <canvas id="hourlyChart" height="110"></canvas>
+      </div>
+
+      <div class="card">
+        <h3>집계: 요일별 평균가</h3>
+        <canvas id="weekdayChart" height="120"></canvas>
+      </div>
+    </div>
+
+    <script>
+      const defaultUrl = 'https://mashop.kr/jari/%EB%AF%B8%EB%82%98%EB%A5%B4%EC%88%B2%3A%EB%82%A8%EA%B2%A8%EC%A7%84%20%EC%9A%A9%EC%9D%98%20%EB%91%A5%EC%A7%80';
+      const weekdays = ['일', '월', '화', '수', '목', '금', '토'];
+      const numberFormat = new Intl.NumberFormat('ko-KR');
+
+      const urlInput = document.getElementById('url');
+      const startInput = document.getElementById('startDate');
+      const endInput = document.getElementById('endDate');
+      const button = document.getElementById('loadBtn');
+      const summary = document.getElementById('summary');
+      const status = document.getElementById('status');
+
+      urlInput.value = defaultUrl;
+      const end = new Date();
+      const start = new Date();
+      start.setDate(end.getDate() - 14);
+      startInput.value = start.toISOString().slice(0, 10);
+      endInput.value = end.toISOString().slice(0, 10);
+
+      let hourlyChart;
+      let weekdayChart;
+
+      function toDateLabel(dateTime) {
+        const d = new Date(dateTime);
+        return `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}시`;
+      }
+
+      function buildWeekdayStats(rows) {
+        const sums = Array(7).fill(0);
+        const counts = Array(7).fill(0);
+
+        for (const row of rows) {
+          if (typeof row.price !== 'number' || !row.dateTime) continue;
+          const day = new Date(row.dateTime).getDay();
+          sums[day] += row.price;
+          counts[day] += 1;
+        }
+
+        return weekdays.map((name, idx) => ({
+          name,
+          avg: counts[idx] ? Math.round(sums[idx] / counts[idx]) : 0,
+          count: counts[idx],
+        }));
+      }
+
+      function renderSummary(stats, count) {
+        const valid = stats.filter((s) => s.count > 0);
+        summary.innerHTML = '';
+
+        if (!valid.length) {
+          summary.innerHTML = '<span class="pill">집계 가능한 데이터가 없습니다.</span>';
+          return;
+        }
+
+        const cheapest = valid.reduce((a, b) => (a.avg <= b.avg ? a : b));
+        const expensive = valid.reduce((a, b) => (a.avg >= b.avg ? a : b));
+
+        summary.innerHTML = `
+          <span class="pill">분석 데이터: ${count}개 시점</span>
+          <span class="pill">가장 저렴한 요일: ${cheapest.name}요일 (${numberFormat.format(cheapest.avg)} 메소)</span>
+          <span class="pill">가장 비싼 요일: ${expensive.name}요일 (${numberFormat.format(expensive.avg)} 메소)</span>
+        `;
+      }
+
+      function renderHourlyChart(rows) {
+        const labels = rows.map((r) => toDateLabel(r.dateTime));
+        const values = rows.map((r) => r.price);
+
+        if (hourlyChart) hourlyChart.destroy();
+
+        hourlyChart = new Chart(document.getElementById('hourlyChart'), {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [{
+              label: '시간별 평균가(메소)',
+              data: values,
+              borderColor: '#2563eb',
+              backgroundColor: 'rgba(37, 99, 235, 0.2)',
+              pointRadius: 1,
+              tension: 0.2,
+            }],
+          },
+          options: {
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => `${numberFormat.format(ctx.raw)} 메소`,
+                },
+              },
+            },
+            scales: {
+              y: { ticks: { callback: (v) => numberFormat.format(v) } },
+            },
+          },
+        });
+      }
+
+      function renderWeekdayChart(stats) {
+        if (weekdayChart) weekdayChart.destroy();
+
+        weekdayChart = new Chart(document.getElementById('weekdayChart'), {
+          type: 'bar',
+          data: {
+            labels: stats.map((s) => `${s.name}요일`),
+            datasets: [{
+              label: '요일별 평균가(메소)',
+              data: stats.map((s) => s.avg),
+              backgroundColor: stats.map((s) => (s.count ? '#4f46e5' : '#d1d5db')),
+              borderRadius: 6,
+            }],
+          },
+          options: {
+            plugins: {
+              tooltip: {
+                callbacks: {
+                  label: (ctx) => `${numberFormat.format(ctx.raw)} 메소`,
+                },
+              },
+            },
+            scales: {
+              y: { ticks: { callback: (v) => numberFormat.format(v) } },
+            },
+          },
+        });
+      }
+
+      async function loadData() {
+        status.textContent = '메랜샵 시간별 평균가 그래프 데이터를 가져오는 중...';
+        status.className = '';
+        button.disabled = true;
+
+        try {
+          const params = new URLSearchParams({
+            url: urlInput.value,
+            startDate: startInput.value,
+            endDate: endInput.value,
+          });
+
+          const res = await fetch(`/api/prices?${params}`);
+          const payload = await res.json();
+
+          if (!res.ok) {
+            throw new Error(payload.message || '요청 실패');
+          }
+
+          const rows = payload.rows || [];
+          const stats = buildWeekdayStats(rows);
+
+          renderHourlyChart(rows);
+          renderWeekdayChart(stats);
+          renderSummary(stats, rows.length);
+          status.textContent = `${payload.keyword} 데이터 로드 완료`;
+        } catch (error) {
+          status.textContent = error.message;
+          status.className = 'error';
+        } finally {
+          button.disabled = false;
+        }
+      }
+
+      button.addEventListener('click', loadData);
+      loadData();
+    </script>
+  </body>
+</html>
